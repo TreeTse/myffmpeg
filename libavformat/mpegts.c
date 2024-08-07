@@ -193,7 +193,7 @@ static const AVOption options[] = {
     {"skip_unknown_pmt", "skip PMTs for programs not advertised in the PAT", offsetof(MpegTSContext, skip_unknown_pmt), AV_OPT_TYPE_BOOL,
      {.i64 = 0}, 0, 1, AV_OPT_FLAG_DECODING_PARAM },
     {"merge_pmt_versions", "re-use streams when PMT's version/pids change", offsetof(MpegTSContext, merge_pmt_versions), AV_OPT_TYPE_BOOL,
-     {.i64 = 0}, 0, 1,  AV_OPT_FLAG_DECODING_PARAM },
+     {.i64 = 0}, 0, 1,  AV_OPT_FLAG_DECODING_PARAM },//add:merge_pmt_version:manually
     {"skip_changes", "skip changing / adding streams / programs", offsetof(MpegTSContext, skip_changes), AV_OPT_TYPE_BOOL,
      {.i64 = 0}, 0, 1, 0 },
     {"skip_clear", "skip clearing programs", offsetof(MpegTSContext, skip_clear), AV_OPT_TYPE_BOOL,
@@ -246,6 +246,7 @@ typedef struct PESContext {
     int pid;
     int pcr_pid; /**< if -1 then all packets containing PCR are considered */
     int stream_type;
+    int last_stream_type;//add:codec changes in the same stream
     MpegTSContext *ts;
     AVFormatContext *stream;
     AVStream *st;
@@ -907,6 +908,7 @@ static int mpegts_set_stream_info(AVStream *st, PESContext *pes,
     st->need_parsing      = AVSTREAM_PARSE_FULL;
     pes->st          = st;
     pes->stream_type = stream_type;
+    pes->last_stream_type = stream_type;
 
     av_log(pes->stream, AV_LOG_DEBUG,
            "stream=%d stream_type=%x pid=%x prog_reg_desc=%.4s\n",
@@ -2444,6 +2446,9 @@ static void pmt_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
         if (!st)
             goto out;
 
+        if (pes->last_stream_type != 0 && pes->last_stream_type != stream_type) {
+            av_log(NULL, AV_LOG_ERROR, "stream type change!\n");
+        }
         if (pes && !pes->stream_type)
             mpegts_set_stream_info(st, pes, stream_type, prog_reg_desc);
 
@@ -2535,6 +2540,9 @@ static void pat_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
             program = av_new_program(ts->stream, sid);
             if (program) {
                 program->program_num = sid;
+                if (program->pmt_pid != 0 && program->pmt_pid != pmt_pid) {//add:adapter pid change of mpegts
+                    program->pmt_pid_change = 1;
+                }
                 program->pmt_pid = pmt_pid;
             }
             if (fil)

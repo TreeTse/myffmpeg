@@ -4380,7 +4380,10 @@ static int process_input(int file_index)
        dynamically in stream : we ignore them */
     if (pkt.stream_index >= ifile->nb_streams) {
         report_new_stream(file_index, &pkt);
-        goto discard_packet;
+        if (is->programs[0]->pmt_pid_change) {
+            pkt.stream_index = pkt.stream_index % ifile->nb_streams;//add:adapter pid change of mpegts
+        }
+        //goto discard_packet;
     }
 
     ist = input_streams[ifile->ist_index + pkt.stream_index];

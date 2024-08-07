@@ -1154,6 +1154,7 @@ typedef struct AVProgram {
 
     int program_num;
     int pmt_pid;
+    int pmt_pid_change;
     int pcr_pid;
     int pmt_version;
 
