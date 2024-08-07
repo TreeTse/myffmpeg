@@ -748,6 +748,19 @@ void uninit_parse_context(OptionParseContext *octx)
     uninit_opts();
 }
 
+/*
+ *    【OptionParseContext】
+ *    OptionGroupList *groups;   →  【OptionGroupList】
+ *                                   OptionGroup *groups;   →  【OptionGroup】        【Option】                        【OptionDef】
+ *    OptionGroup global_opts    → → → → → → → → → → → → → ↗   Option *opts;    →    OptionGroupDef *group_def;  →      const char *name;
+ *                                                                                                                       union {
+ *                                                                                                                          void *dst_ptr;
+ *                                                                                                                          int (*func_arg)(void *, const char *, const char *);
+ *                                                                                                                          size_t off;
+ *                                                                                                                      } u;
+ *                                                                                                                      const char *help;
+ *                                                                                                                      const char *argname;
+ */
 int split_commandline(OptionParseContext *octx, int argc, char *argv[],
                       const OptionDef *options,
                       const OptionGroupDef *groups, int nb_groups)

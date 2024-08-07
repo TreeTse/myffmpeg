@@ -723,7 +723,7 @@ static void write_packet(OutputFile *of, AVPacket *pkt, OutputStream *ost, int u
         ost->frame_number++;
     }
 
-    if (!of->header_written) {
+    if (!of->header_written) {//缓存packet进ost->muxing_queue
         AVPacket tmp_pkt = {0};
         /* the muxer is not initialized yet, buffer the packet */
         if (!av_fifo_space(ost->muxing_queue)) {
@@ -1126,7 +1126,7 @@ static void do_video_out(OutputFile *of,
     AVPacket pkt;
     AVCodecContext *enc = ost->enc_ctx;
     AVRational frame_rate;
-    int nb_frames, nb0_frames, i;
+    int nb_frames, nb0_frames, i;//nb0_frames：为cfr功能服务的
     double delta, delta0;
     double duration = 0;
     double sync_ipts = AV_NOPTS_VALUE;
@@ -1135,7 +1135,7 @@ static void do_video_out(OutputFile *of,
     AVFilterContext *filter = ost->filter->filter;
 
     init_output_stream_wrapper(ost, next_picture, 1);
-    sync_ipts = adjust_frame_pts_to_encoder_tb(of, ost, next_picture);
+    sync_ipts = adjust_frame_pts_to_encoder_tb(of, ost, next_picture);//与从滤镜里面读取出来的 AVFrame 的 pts 是一样的，只是单位不一样
 
     if (ost->source_index >= 0)
         ist = input_streams[ost->source_index];
@@ -1235,7 +1235,7 @@ static void do_video_out(OutputFile *of,
         }
     }
 
-    nb_frames = FFMIN(nb_frames, ost->max_frames - ost->frame_number);
+    nb_frames = FFMIN(nb_frames, ost->max_frames - ost->frame_number);//当超过最大帧数之后，nb_frames 会变成负数，所以就会丢弃帧
     nb0_frames = FFMIN(nb0_frames, nb_frames);
 
     memmove(ost->last_nb0_frames + 1,
@@ -1293,6 +1293,7 @@ static void do_video_out(OutputFile *of,
             in_picture->pts != AV_NOPTS_VALUE)
             ost->forced_kf_ref_pts = in_picture->pts;
 
+        /********** start--about forced_keyframe *********/
         pts_time = in_picture->pts != AV_NOPTS_VALUE ?
             (in_picture->pts - ost->forced_kf_ref_pts) * av_q2d(enc->time_base) : NAN;
         if (ost->forced_kf_index < ost->forced_kf_count &&
@@ -1332,6 +1333,7 @@ static void do_video_out(OutputFile *of,
             in_picture->pict_type = AV_PICTURE_TYPE_I;
             av_log(NULL, AV_LOG_DEBUG, "Forced keyframe at time %f\n", pts_time);
         }
+        /********** end--about forced_keyframe *********/
 
         update_benchmark(NULL);
         if (debug_ts) {
@@ -1351,7 +1353,7 @@ static void do_video_out(OutputFile *of,
 
         while (1) {
             ret = avcodec_receive_packet(enc, &pkt);
-            update_benchmark("encode_video %d.%d", ost->file_index, ost->index);
+            update_benchmark("encode_video %d.%d", ost->file_index, ost->index);//统计性能
             if (ret == AVERROR(EAGAIN))
                 break;
             if (ret < 0)
@@ -1377,7 +1379,7 @@ static void do_video_out(OutputFile *of,
             }
 
             frame_size = pkt.size;
-            output_packet(of, &pkt, ost, 0);
+            output_packet(of, &pkt, ost, 0);//写入文件；
 
             /* if two pass, output log */
             if (ost->logfile && enc->stats_out) {
@@ -1483,7 +1485,7 @@ static int reap_filters(int flush)
     int i;
 
     /* Reap all buffers present in the buffer sinks */
-    for (i = 0; i < nb_output_streams; i++) {
+    for (i = 0; i < nb_output_streams; i++) {//遍历所有输出流
         OutputStream *ost = output_streams[i];
         OutputFile    *of = output_files[ost->file_index];
         AVFilterContext *filter;
@@ -1504,16 +1506,16 @@ static int reap_filters(int flush)
          * the encoder earlier than receiving the first AVFrame.
          */
         if (av_buffersink_get_type(filter) == AVMEDIA_TYPE_AUDIO)
-            init_output_stream_wrapper(ost, NULL, 1);
+            init_output_stream_wrapper(ost, NULL, 1);//初始化音频输出流
 
-        if (!ost->filtered_frame && !(ost->filtered_frame = av_frame_alloc())) {
+        if (!ost->filtered_frame && !(ost->filtered_frame = av_frame_alloc())) {//申请ost->filtered_frame内存
             return AVERROR(ENOMEM);
         }
         filtered_frame = ost->filtered_frame;
 
-        while (1) {
+        while (1) {//循环读取数据，直到无数据可读
             ret = av_buffersink_get_frame_flags(filter, filtered_frame,
-                                               AV_BUFFERSINK_FLAG_NO_REQUEST);
+                                               AV_BUFFERSINK_FLAG_NO_REQUEST);//从buffersink滤镜读取数据
             if (ret < 0) {
                 if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
                     av_log(NULL, AV_LOG_WARNING,
@@ -2157,6 +2159,7 @@ static int ifilter_send_frame(InputFilter *ifilter, AVFrame *frame)
     int need_reinit, ret, i;
 
     /* determine if the parameters for this input changed */
+    //对比InputFilter 跟 AVFrame 的一些参数
     need_reinit = ifilter->format != frame->format;
 
     switch (ifilter->ist->st->codecpar->codec_type) {
@@ -2185,9 +2188,9 @@ static int ifilter_send_frame(InputFilter *ifilter, AVFrame *frame)
     }
 
     /* (re)init the graph if possible, otherwise buffer the frame and return */
-    if (need_reinit || !fg->graph) {
+    if (need_reinit || !fg->graph) {//是否已经打开了滤镜容器
         for (i = 0; i < fg->nb_inputs; i++) {
-            if (!ifilter_has_all_input_formats(fg)) {
+            if (!ifilter_has_all_input_formats(fg)) {//FilterGraph还有InputFilter没有初始化，不能把AVFrame发送给滤镜
                 AVFrame *tmp = av_frame_clone(frame);
                 if (!tmp)
                     return AVERROR(ENOMEM);
@@ -2200,7 +2203,7 @@ static int ifilter_send_frame(InputFilter *ifilter, AVFrame *frame)
                         return ret;
                     }
                 }
-                av_fifo_generic_write(ifilter->frame_queue, &tmp, sizeof(tmp), NULL);
+                av_fifo_generic_write(ifilter->frame_queue, &tmp, sizeof(tmp), NULL);//只能先把AVFrame写进队列去
                 return 0;
             }
         }
@@ -2211,14 +2214,14 @@ static int ifilter_send_frame(InputFilter *ifilter, AVFrame *frame)
             return ret;
         }
 
-        ret = configure_filtergraph(fg);
+        ret = configure_filtergraph(fg);//configure_filtergraph打开滤镜之后，就会把之前队列缓存的数据往滤镜里面发送
         if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Error reinitializing filters!\n");
             return ret;
         }
     }
 
-    ret = av_buffersrc_add_frame_flags(ifilter->filter, frame, AV_BUFFERSRC_FLAG_PUSH);
+    ret = av_buffersrc_add_frame_flags(ifilter->filter, frame, AV_BUFFERSRC_FLAG_PUSH);//发送AVFrame给滤镜
     if (ret < 0) {
         if (ret != AVERROR_EOF)
             av_log(NULL, AV_LOG_ERROR, "Error while filtering: %s\n", av_err2str(ret));
@@ -2287,7 +2290,7 @@ static int send_frame_to_filters(InputStream *ist, AVFrame *decoded_frame)
     for (i = 0; i < ist->nb_filters; i++) {
         if (i < ist->nb_filters - 1) {
             f = ist->filter_frame;
-            ret = av_frame_ref(f, decoded_frame);
+            ret = av_frame_ref(f, decoded_frame);//创建引用；因为send_frame_to_filters执行完后会释放掉frame
             if (ret < 0)
                 break;
         } else
@@ -2366,10 +2369,13 @@ static int decode_audio(InputStream *ist, AVPacket *pkt, int *got_output,
     return err < 0 ? err : ret;
 }
 
+/*   pkt 等于 null，这种情况代表不往解码器发送 AVPacket，只是从解码器读 AVFrame，这是为了应对发送一个 AVPacket，解码器吐出来多个 AVFrame 的情况
+ *   pkt 不等于 null，但是它的 size 等于 0，这种情况代表需要 flush 冲刷解码器，把剩余的帧都刷出来，通常只有处理到文件结尾的时候会这么做
+ */
 static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_t *duration_pts, int eof,
                         int *decode_failed)
 {
-    AVFrame *decoded_frame;
+    AVFrame *decoded_frame;//用来存储解码出来的AVFrame
     int i, ret = 0, err = 0;
     int64_t best_effort_timestamp;
     int64_t dts = AV_NOPTS_VALUE;
@@ -2425,7 +2431,7 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_
     }
 
     if (ret != AVERROR_EOF)
-        check_decode_result(ist, got_output, ret);
+        check_decode_result(ist, got_output, ret);//统计解码错误率
 
     if (*got_output && ret >= 0) {
         if (ist->dec_ctx->width  != decoded_frame->width ||
@@ -2491,7 +2497,7 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_
     if (ist->st->sample_aspect_ratio.num)
         decoded_frame->sample_aspect_ratio = ist->st->sample_aspect_ratio;
 
-    err = send_frame_to_filters(ist, decoded_frame);
+    err = send_frame_to_filters(ist, decoded_frame);//发送给滤镜进行处理
 
 fail:
     av_frame_unref(ist->filter_frame);
@@ -2592,6 +2598,9 @@ static int send_filter_eof(InputStream *ist)
 }
 
 /* pkt = NULL means EOF (needed to flush decoder buffers) */
+//AVPacket *pkt，送给解码器的 AVPacket。如果为 NULL，就会 flush 解码器，把解码器的数据都刷出来
+//no_eof 用来控制要不要往输入流绑定的入口滤镜发送 eof。当 pkt 为 NULL 的时候这个字段才会生效
+//no_eof：不会对入口滤镜进行 eof 操作，因为文件会循环，还需要复用之前的滤镜容器
 static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eof)
 {
     int ret = 0, i;
@@ -2650,7 +2659,7 @@ static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eo
             if (!repeating || !pkt || got_output) {
                 if (pkt && pkt->duration) {
                     duration_dts = av_rescale_q(pkt->duration, ist->st->time_base, AV_TIME_BASE_Q);
-                } else if(ist->dec_ctx->framerate.num != 0 && ist->dec_ctx->framerate.den != 0) {
+                } else if(ist->dec_ctx->framerate.num != 0 && ist->dec_ctx->framerate.den != 0) {//如果pkt->duration为空，就使用帧率来预估
                     int ticks= av_stream_get_parser(ist->st) ? av_stream_get_parser(ist->st)->repeat_pict+1 : ist->dec_ctx->ticks_per_frame;
                     duration_dts = ((int64_t)AV_TIME_BASE *
                                     ist->dec_ctx->framerate.den * ticks) /
@@ -2915,13 +2924,14 @@ static int get_buffer(AVCodecContext *s, AVFrame *frame, int flags)
     return avcodec_default_get_buffer2(s, frame, flags);
 }
 
+//给解码器context参数赋值，然后打开解码器
 static int init_input_stream(int ist_index, char *error, int error_len)
 {
     int ret;
-    InputStream *ist = input_streams[ist_index];
+    InputStream *ist = input_streams[ist_index];//从全局变量中获取对应的流
 
-    if (ist->decoding_needed) {
-        AVCodec *codec = ist->dec;
+    if (ist->decoding_needed) {//是否需要解码
+        AVCodec *codec = ist->dec;//获取对应的解码器
         if (!codec) {
             snprintf(error, error_len, "Decoder (codec %s) not found for input stream #%d:%d",
                     avcodec_get_name(ist->dec_ctx->codec_id), ist->file_index, ist->st->index);
@@ -2929,13 +2939,13 @@ static int init_input_stream(int ist_index, char *error, int error_len)
         }
 
         ist->dec_ctx->opaque                = ist;
-        ist->dec_ctx->get_format            = get_format;
+        ist->dec_ctx->get_format            = get_format;//自定义的获取像素格式
         ist->dec_ctx->get_buffer2           = get_buffer;
 #if LIBAVCODEC_VERSION_MAJOR < 60
         ist->dec_ctx->thread_safe_callbacks = 1;
 #endif
 
-        av_opt_set_int(ist->dec_ctx, "refcounted_frames", 1, 0);
+        av_opt_set_int(ist->dec_ctx, "refcounted_frames", 1, 0);//设置解码后由调用者去释放数据
         if (ist->dec_ctx->codec_id == AV_CODEC_ID_DVB_SUBTITLE &&
            (ist->decoding_needed & DECODING_FOR_OST)) {
             av_dict_set(&ist->decoder_opts, "compute_edt", "1", AV_DICT_DONT_OVERWRITE);
@@ -2943,11 +2953,11 @@ static int init_input_stream(int ist_index, char *error, int error_len)
                 av_log(NULL, AV_LOG_WARNING, "Warning using DVB subtitles for filtering and output at the same time is not fully supported, also see -compute_edt [0|1]\n");
         }
 
-        av_dict_set(&ist->decoder_opts, "sub_text_format", "ass", AV_DICT_DONT_OVERWRITE);
+        av_dict_set(&ist->decoder_opts, "sub_text_format", "ass", AV_DICT_DONT_OVERWRITE);//字幕相关设置
 
         /* Useful for subtitles retiming by lavf (FIXME), skipping samples in
          * audio, and video decoders such as cuvid or mediacodec */
-        ist->dec_ctx->pkt_timebase = ist->st->time_base;
+        ist->dec_ctx->pkt_timebase = ist->st->time_base;//设置timebase
 
         if (!av_dict_get(ist->decoder_opts, "threads", NULL, 0))
             av_dict_set(&ist->decoder_opts, "threads", "auto", 0);
@@ -2963,7 +2973,7 @@ static int init_input_stream(int ist_index, char *error, int error_len)
             return ret;
         }
 
-        if ((ret = avcodec_open2(ist->dec_ctx, codec, &ist->decoder_opts)) < 0) {
+        if ((ret = avcodec_open2(ist->dec_ctx, codec, &ist->decoder_opts)) < 0) {//打开解码器
             if (ret == AVERROR_EXPERIMENTAL)
                 abort_codec_experimental(codec, 0);
 
@@ -3744,7 +3754,7 @@ static int transcode_init(void)
              output_streams[i]->enc_ctx->codec_type == AVMEDIA_TYPE_AUDIO))
             continue;
 
-        ret = init_output_stream_wrapper(output_streams[i], NULL, 0);
+        ret = init_output_stream_wrapper(output_streams[i], NULL, 0);//stream copy模式是在此进行输出流初始化
         if (ret < 0)
             goto dump_format;
     }
@@ -3916,10 +3926,11 @@ static OutputStream *choose_output(void)
                 "cur_dts is invalid st:%d (%d) [init:%d i_done:%d finish:%d] (this is harmless if it occurs once at the start per stream)\n",
                 ost->st->index, ost->st->id, ost->initialized, ost->inputs_done, ost->finished);
 
-        if (!ost->initialized && !ost->inputs_done)
+        //滤镜输出 AVFrame 的时候才会初始化输出流，因为这时候才知道具体要编码的像素格式等信息（不过对于音频输出流，会提前进行初始化）
+        if (!ost->initialized && !ost->inputs_done)//优先选择未初始化的输出流
             return ost;
 
-        if (!ost->finished && opts < opts_min) {
+        if (!ost->finished && opts < opts_min) {//次要选择时间最短的输出流
             opts_min = opts;
             ost_min  = ost->unavailable ? NULL : ost;
         }
@@ -4305,13 +4316,13 @@ static int process_input(int file_index)
     int disable_discontinuity_correction = copy_ts;
 
     is  = ifile->ctx;
-    ret = get_input_packet(ifile, &pkt);
+    ret = get_input_packet(ifile, &pkt);//读取一个packet
 
     if (ret == AVERROR(EAGAIN)) {
         ifile->eagain = 1;
         return ret;
     }
-    if (ret < 0 && ifile->loop) {
+    if (ret < 0 && ifile->loop) {//文件结束但是有循环
         AVCodecContext *avctx;
         for (i = 0; i < ifile->nb_streams; i++) {
             ist = input_streams[ifile->ist_index + i];
@@ -4341,7 +4352,7 @@ static int process_input(int file_index)
             return ret;
         }
     }
-    if (ret < 0) {
+    if (ret < 0) {//文件结束，flush数据
         if (ret != AVERROR_EOF) {
             print_error(is->url, ret);
             if (exit_on_error)
@@ -4383,15 +4394,15 @@ static int process_input(int file_index)
         goto discard_packet;
     }
 
-    ist = input_streams[ifile->ist_index + pkt.stream_index];
+    ist = input_streams[ifile->ist_index + pkt.stream_index];//获取InputStream
 
-    ist->data_size += pkt.size;
+    ist->data_size += pkt.size;//统计数据
     ist->nb_packets++;
 
     if (ist->discard)
         goto discard_packet;
 
-    if (pkt.flags & AV_PKT_FLAG_CORRUPT) {
+    if (pkt.flags & AV_PKT_FLAG_CORRUPT) {//包损坏
         av_log(NULL, exit_on_error ? AV_LOG_FATAL : AV_LOG_WARNING,
                "%s: corrupt input packet in stream %d\n", is->url, pkt.stream_index);
         if (exit_on_error)
@@ -4410,7 +4421,7 @@ static int process_input(int file_index)
                av_ts2timestr(input_files[ist->file_index]->ts_offset, &AV_TIME_BASE_Q));
     }
 
-    if(!ist->wrap_correction_done && is->start_time != AV_NOPTS_VALUE && ist->st->pts_wrap_bits < 64){
+    if(!ist->wrap_correction_done && is->start_time != AV_NOPTS_VALUE && ist->st->pts_wrap_bits < 64){//处理时间戳回环问题？
         int64_t stime, stime2;
         // Correcting starttime based on the enabled streams
         // FIXME this ideally should be done before the first use of starttime but we do not know which are the enabled streams at that point.
@@ -4475,6 +4486,7 @@ static int process_input(int file_index)
     if (pkt.dts != AV_NOPTS_VALUE)
         pkt.dts *= ist->ts_scale;
 
+    /***  对时间戳进行纠正 *****/
     pkt_dts = av_rescale_q_rnd(pkt.dts, ist->st->time_base, AV_TIME_BASE_Q, AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX);
     if ((ist->dec_ctx->codec_type == AVMEDIA_TYPE_VIDEO ||
          ist->dec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) &&
@@ -4495,7 +4507,7 @@ static int process_input(int file_index)
 
     duration = av_rescale_q(ifile->duration, ifile->time_base, ist->st->time_base);
     if (pkt.pts != AV_NOPTS_VALUE) {
-        pkt.pts += duration;
+        pkt.pts += duration;//文件循环的时候，附加上时间
         ist->max_pts = FFMAX(pkt.pts, ist->max_pts);
         ist->min_pts = FFMIN(pkt.pts, ist->min_pts);
     }
@@ -4518,7 +4530,7 @@ static int process_input(int file_index)
          ist->dec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) &&
          pkt_dts != AV_NOPTS_VALUE && ist->next_dts != AV_NOPTS_VALUE &&
         !disable_discontinuity_correction) {
-        int64_t delta   = pkt_dts - ist->next_dts;
+        int64_t delta   = pkt_dts - ist->next_dts;//ist->next_dts由上一个pkt的dts+duration计算出来，duration根据帧率算出
         if (is->iformat->flags & AVFMT_TS_DISCONT) {
             if (delta < -1LL*dts_delta_threshold*AV_TIME_BASE ||
                 delta >  1LL*dts_delta_threshold*AV_TIME_BASE ||
@@ -4566,7 +4578,7 @@ static int process_input(int file_index)
 
     sub2video_heartbeat(ist, pkt.pts);
 
-    process_input_packet(ist, &pkt, 0);
+    process_input_packet(ist, &pkt, 0);//处理读取到的pkt
 
 discard_packet:
     av_packet_unref(&pkt);
@@ -4608,7 +4620,7 @@ static int transcode_from_filter(FilterGraph *graph, InputStream **best_ist)
         if (input_files[ist->file_index]->eagain ||
             input_files[ist->file_index]->eof_reached)
             continue;
-        nb_requests = av_buffersrc_get_nb_failed_requests(ifilter->filter);
+        nb_requests = av_buffersrc_get_nb_failed_requests(ifilter->filter);//获取每个buffer入口滤镜的失败次数，选出失败次数最多的入口滤镜，因为入口滤镜绑定了输入流，所以输入流也就确定了
         if (nb_requests > nb_requests_max) {
             nb_requests_max = nb_requests;
             *best_ist = ist;
@@ -4633,17 +4645,27 @@ static int transcode_step(void)
     InputStream  *ist = NULL;
     int ret;
 
+    /* choose_output：
+     * 优选选择 没有初始化的 OutputStream，如果 OutputStream 都初始化了，
+     * 就选当前 stream 时长最短的返回，最短时间通过 ost->st->cur_dts 来判断
+     * 例如音频流已经输出了2分钟了，视频流才输出1分钟，choose_output() 函数就会返回 视频流
+     */
     ost = choose_output();
     if (!ost) {
         if (got_eagain()) {
             reset_eagain();
-            av_usleep(10000);
+            av_usleep(10000);  //没有输出流可用，休眠一段时间
             return 0;
         }
         av_log(NULL, AV_LOG_VERBOSE, "No more inputs to read from, finishing.\n");
         return AVERROR_EOF;
     }
 
+    /*
+     * 以下根据条件选出输入流的策略：
+     * 第二个条件分支：如果滤镜容器已经打开，从transcode_from_filter选出输入流
+     * 第三个条件分支：只要有一个滤镜未配置好，滤镜容器就不能打开；这时候选出一个从未解码出AVFrame的输入流出来处理
+     */
     if (ost->filter && !ost->filter->graph->graph) {
         if (ifilter_has_all_input_formats(ost->filter->graph)) {
             ret = configure_filtergraph(ost->filter->graph);
@@ -4679,11 +4701,11 @@ static int transcode_step(void)
         if (av_buffersink_get_type(ost->filter->filter) == AVMEDIA_TYPE_AUDIO)
             init_output_stream_wrapper(ost, NULL, 1);
 
-        if ((ret = transcode_from_filter(ost->filter->graph, &ist)) < 0)
+        if ((ret = transcode_from_filter(ost->filter->graph, &ist)) < 0)//从滤镜容器中选择输入InputStream
             return ret;
         if (!ist)
             return 0;
-    } else if (ost->filter) {
+    } else if (ost->filter) {//选一个从未解码出AVFrame的输入流来进行处理
         int i;
         for (i = 0; i < ost->filter->graph->nb_inputs; i++) {
             InputFilter *ifilter = ost->filter->graph->inputs[i];
@@ -4697,11 +4719,11 @@ static int transcode_step(void)
             return 0;
         }
     } else {
-        av_assert0(ost->source_index >= 0);
+        av_assert0(ost->source_index >= 0);//直接用输出流对应的输入流
         ist = input_streams[ost->source_index];
     }
 
-    ret = process_input(ist->file_index);
+    ret = process_input(ist->file_index);//从输入流关联的输入文件里读取AVPacket
     if (ret == AVERROR(EAGAIN)) {
         if (input_files[ist->file_index]->eagain)
             ost->unavailable = 1;
@@ -4711,12 +4733,17 @@ static int transcode_step(void)
     if (ret < 0)
         return ret == AVERROR_EOF ? 0 : ret;
 
-    return reap_filters(0);
+    return reap_filters(0);//编码封装：从出口滤镜读取AVFrame，发送给编码器编码，最后保存进文件
 }
 
 /*
  * The following code is the main loop of the file converter
  */
+ /*  每次读取一个AVPacket，发送给解码器进行解码
+  *  解码器可能会输出 0个 ~ N个 AVFrame，然后把 AVFrame 发送给滤镜容器
+  *  如果滤镜容器有数据能出来，就会接着发送给编码器进行编码
+  *  如果编码器有 AVPacket 数据可以出来，就把 AVPacket 写入文件保存
+  */
 static int transcode(void)
 {
     int ret, i;
