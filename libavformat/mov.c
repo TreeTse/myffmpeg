@@ -8038,8 +8038,11 @@ retry:
 	}
 
 	if (st->discard != AVDISCARD_ALL) {
+		sc->pb->read_pktinfo_start = 1;//add:mp4probe
 		int64_t ret64 = avio_seek(sc->pb, sample->pos, SEEK_SET);
 		if (ret64 != sample->pos) {
+			//if (ret64 == AVERROR_EXIT)//add:mp4probe
+				//return AVERROR_EXIT;
 			av_log(mov->fc, AV_LOG_ERROR, "stream %d, offset 0x%"PRIx64": partial file\n",
 				sc->ffindex, sample->pos);
 			if (should_retry(sc->pb, ret64)) {

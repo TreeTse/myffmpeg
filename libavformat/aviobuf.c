@@ -117,6 +117,9 @@ int ffio_init_context(AVIOContext *s,
     s->max_packet_size = 0;
     s->update_checksum = NULL;
     s->short_seek_threshold = SHORT_SEEK_THRESHOLD;
+    s->find_moov= 0;
+    s->read_pktinfo_start = 0;
+    s->first_sample_seek = 0;
 
     if (!read_packet && !write_flag) {
         s->pos     = buffer_size;
@@ -309,7 +312,8 @@ int64_t avio_seek(AVIOContext *s, int64_t offset, int whence)
         s->buf_ptr = s->buf_end - (s->pos - offset);
     } else if(!s->write_flag && offset1 < 0 && -offset1 < buffer_size>>1 && s->seek && offset > 0) {
         int64_t res;
-
+        av_log(NULL, AV_LOG_ERROR, "http short seek\n");
+        //return AVERROR_EXIT;
         pos -= FFMIN(buffer_size>>1, pos);
         if ((res = s->seek(s->opaque, pos, SEEK_SET)) < 0)
             return res;
@@ -321,6 +325,15 @@ int64_t avio_seek(AVIOContext *s, int64_t offset, int whence)
         return avio_seek(s, offset, SEEK_SET | force);
     } else {
         int64_t res;
+        if (pos != 0 && !s->find_moov && s->first_sample_seek && s->read_pktinfo_start) {//add: mp4probe 
+            av_log(NULL, AV_LOG_ERROR, "http reconnect\n");
+            av_log(NULL, AV_LOG_ERROR, "the mp4 file exception.\n");
+            //return AVERROR_EXIT;
+        }
+        if (pos == 0) {
+            av_log(NULL, AV_LOG_INFO, "maybe the moov is behind!\n");
+            s->find_moov = 1;
+        }
         if (s->write_flag) {
             flush_buffer(s);
         }
@@ -333,6 +346,19 @@ int64_t avio_seek(AVIOContext *s, int64_t offset, int whence)
             s->buf_end = s->buffer;
         s->buf_ptr = s->buf_ptr_max = s->buffer;
         s->pos = offset;
+        if (pos != 0 && !s->find_moov) {
+            av_log(NULL, AV_LOG_ERROR, "http reconnect\n");
+            av_log(NULL, AV_LOG_ERROR, "the mp4 file exception.\n");
+            //return AVERROR_EXIT;
+        }
+        if (pos == 0) {
+            av_log(NULL, AV_LOG_INFO, "maybe the moov is behind!\n");
+            s->find_moov = 1;
+        }
+        if (s->read_pktinfo_start) {
+            s->find_moov = 0;
+            s->first_sample_seek = 1;
+        }
     }
     s->eof_reached = 0;
     return offset;

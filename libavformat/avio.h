@@ -284,6 +284,12 @@ typedef struct AVIOContext {
      */
     int seek_count;
 
+    int find_moov;
+    
+    int read_pktinfo_start;
+
+    int first_sample_seek;
+
     /**
      * writeout statistic
      * This field is internal to libavformat and access from outside is not allowed.

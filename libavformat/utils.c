@@ -820,7 +820,8 @@ int ff_read_packet(AVFormatContext *s, AVPacket *pkt)
         ret = s->iformat->read_packet(s, pkt);
         if (ret < 0) {
             av_packet_unref(pkt);
-
+            //if (ret == AVERROR_EXIT)//add:mp4probe
+                //return ret;
             /* Some demuxers return FFERROR_REDO when they consume
                data and discard it (ignored streams, junk, extradata).
                We must re-call the demuxer to get the real packet. */
@@ -1520,6 +1521,8 @@ static int read_frame_internal(AVFormatContext *s, AVPacket *pkt)
         /* read next packet */
         ret = ff_read_packet(s, pkt);
         if (ret < 0) {
+            //if (ret == AVERROR_EXIT)//add:mp4probe
+                //return ret;
             if (ret == AVERROR(EAGAIN))
                 return ret;
             /* flush the parsers */
@@ -3776,6 +3779,9 @@ FF_ENABLE_DEPRECATION_WARNINGS
         /* NOTE: A new stream can be added there if no header in file
          * (AVFMTCTX_NOHEADER). */
         ret = read_frame_internal(ic, &pkt1);
+        /*if (ret == AVERROR_EXIT) {//mp4probe
+            goto find_stream_info_err;
+        }*/
         if (ret == AVERROR(EAGAIN))
             continue;
 
