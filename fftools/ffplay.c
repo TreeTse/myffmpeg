@@ -108,6 +108,8 @@ const int program_birth_year = 2003;
 
 #define USE_ONEPASS_SUBTITLE_RENDER 1
 
+#define USE_AVIO 1
+
 static unsigned sws_flags = SWS_BICUBIC;
 
 typedef struct MyAVPacketList {
@@ -2753,6 +2755,63 @@ static int is_realtime(AVFormatContext *s)
     return 0;
 }
 
+struct buffer_data {
+    uint8_t *ptr;
+    uint8_t* ori_ptr;
+    size_t size; ///< size left in the buffer
+    size_t file_size;
+};
+
+static int seekflag = 0;
+
+static int read_packet(void *opaque, uint8_t *buf, int buf_size)
+{
+    struct buffer_data *bd = (struct buffer_data *)opaque;
+    /*if (seekflag)
+    {
+        buf_size = FFMIN(10, bd->size);
+    }
+    else
+    {
+        buf_size = FFMIN(buf_size, bd->size);
+    }*/
+    buf_size = FFMIN(buf_size, bd->size);
+    if (bd->size == 0) {
+        printf("bd->size == 0\n");
+    }
+
+    if (!buf_size)
+        return AVERROR_EOF;
+    printf("ptr:%p size:%zu\n", bd->ptr, bd->size);
+
+    /* copy internal buffer data to buf */
+    memcpy(buf, bd->ptr, buf_size);
+    bd->ptr  += buf_size;
+    bd->size -= buf_size;
+
+    return buf_size;
+}
+
+static int64_t seek_in_buffer(void* opaque, int64_t offset, int whence)
+{
+    struct buffer_data *bd = (struct buffer_data *)opaque;
+    int64_t ret = -1;
+
+    printf("whence=%d, offset=%"PRId64"\n", whence, offset);
+    switch (whence)
+    {
+    case AVSEEK_SIZE:
+        ret = bd->file_size;
+        break;
+    case SEEK_SET:
+        bd->ptr = bd->ori_ptr + offset;
+        bd->size = bd->file_size - offset;
+        ret = (int64_t)bd->ptr;
+        break;
+    }
+    return ret;
+}
+
 /* this thread gets the stream from the disk or the network */
 static int read_thread(void *arg)
 {
@@ -2767,6 +2826,12 @@ static int read_thread(void *arg)
     SDL_mutex *wait_mutex = SDL_CreateMutex();
     int scan_all_pmts_set = 0;
     int64_t pkt_ts;
+#if USE_AVIO
+    AVIOContext *avio_ctx = NULL;
+    uint8_t *buffer = NULL, *avio_ctx_buffer = NULL;
+    size_t buffer_size, avio_ctx_buffer_size = 32768;//4096
+    struct buffer_data bd = { 0 };
+#endif
 
     if (!wait_mutex) {
         av_log(NULL, AV_LOG_FATAL, "SDL_CreateMutex(): %s\n", SDL_GetError());
@@ -2776,6 +2841,21 @@ static int read_thread(void *arg)
 
     memset(st_index, -1, sizeof(st_index));
     is->eof = 0;
+
+#if USE_AVIO
+    /* slurp file content into buffer */
+    ret = av_file_map(input_filename, &buffer, &buffer_size, 0, NULL);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_FATAL, "av_file_map failed.\n");
+        goto fail;
+    }
+
+    /* fill opaque structure used by the AVIOContext read callback */
+    bd.ptr = buffer;
+    bd.ori_ptr = buffer;
+    bd.size = buffer_size;
+    bd.file_size = buffer_size;
+#endif
 
     ic = avformat_alloc_context();
     if (!ic) {
@@ -2789,7 +2869,31 @@ static int read_thread(void *arg)
         av_dict_set(&format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
         scan_all_pmts_set = 1;
     }
+
+#if USE_AVIO
+    avio_ctx_buffer = av_malloc(avio_ctx_buffer_size);
+    if (!avio_ctx_buffer) {
+        av_log(NULL, AV_LOG_FATAL, "av_malloc failed.\n");
+        ret = AVERROR(ENOMEM);
+        goto fail;//todo:
+    }
+    avio_ctx = avio_alloc_context(avio_ctx_buffer, avio_ctx_buffer_size, 0, &bd,
+                                  &read_packet, NULL, &seek_in_buffer);
+    if (!avio_ctx) {
+        av_log(NULL, AV_LOG_FATAL, "Could not allocate context.\n");
+        ret = AVERROR(ENOMEM);
+        goto fail;//todo:
+    }
+    //avio_ctx->direct = 1;
+    ic->pb = avio_ctx;
+    //is->iformat = av_find_input_format("mp4");
+#endif
+
+#if USE_AVIO
+    err = avformat_open_input(&ic, NULL, is->iformat, &format_opts);
+#else
     err = avformat_open_input(&ic, is->filename, is->iformat, &format_opts);
+#endif
     if (err < 0) {
         print_error(is->filename, err);
         ret = -1;
@@ -3040,6 +3144,10 @@ static int read_thread(void *arg)
         } else {
             is->eof = 0;
         }
+        double pkt_pts = pkt->pts * av_q2d(ic->streams[pkt->stream_index]->time_base);
+        av_log(NULL, AV_LOG_DEBUG,
+            "read_frame stream=%d, pts=%lf, dts=%"PRId64", size=%d, duration=%"PRId64", flags=%d, pos=%"PRId64"\n",
+            pkt->stream_index, pkt_pts, pkt->dts, pkt->size, pkt->duration, pkt->flags, pkt->pos);
         /* check if packet is in play range specified by user, then queue, otherwise discard */
         stream_start_time = ic->streams[pkt->stream_index]->start_time;
         pkt_ts = pkt->pts == AV_NOPTS_VALUE ? pkt->dts : pkt->pts;
